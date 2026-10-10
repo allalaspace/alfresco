@@ -1,0 +1,207 @@
+# ACS Community 26.2 — installation locale.
+# Aligné sur Alfresco/acs-deployment (community-compose.yaml), sans Traefik,
+# Kibana, Content App ni Control Center : le repository est exposé directement.
+#
+# Recherche : Elasticsearch + batch-indexing (Solr est déprécié depuis ACS 26.2).
+# Le secret partagé reste requis pour les transformations de contenu.
+#
+# Prérequis : Docker Compose v2, au moins 8 Go de RAM pour Docker.
+# Démarrage : cp .env.example .env && docker compose up -d
+
+name: ${COMPOSE_PROJECT_NAME:-alfresco-local}
+
+services:
+  alfresco:
+    image: docker.io/alfresco/alfresco-content-repository-community:${ACS_VERSION:-26.2.0}
+    mem_limit: 1900m
+    environment:
+      JAVA_TOOL_OPTIONS: >-
+        -Dencryption.keystore.type=JCEKS
+        -Dencryption.cipherAlgorithm=DESede/CBC/PKCS5Padding
+        -Dencryption.keyAlgorithm=DESede
+        -Dencryption.keystore.location=/usr/local/tomcat/shared/classes/alfresco/extension/keystore/keystore
+        -Dmetadata-keystore.password=mp6yc0UD9e
+        -Dmetadata-keystore.aliases=metadata
+        -Dmetadata-keystore.metadata.password=oKIWzVdEdA
+        -Dmetadata-keystore.metadata.algorithm=DESede
+      JAVA_OPTS: >-
+        -Ddb.driver=org.postgresql.Driver
+        -Ddb.username=${DB_USER:-alfresco}
+        -Ddb.password=${DB_PASSWORD:-alfresco}
+        -Ddb.url=jdbc:postgresql://postgres:5432/${DB_NAME:-alfresco}
+        -Dsolr.secureComms=secret
+        -Dsolr.sharedSecret=${TRANSFORM_SHARED_SECRET:-secret}
+        -Dindex.subsystem.name=elasticsearch
+        -Delasticsearch.createIndexIfNotExists=true
+        -Delasticsearch.host=elasticsearch
+        -Delasticsearch.port=9200
+        -Dshare.host=${ALFRESCO_PUBLIC_HOST:-localhost}
+        -Dshare.port=${SHARE_PORT:-8081}
+        -Dalfresco.host=${ALFRESCO_PUBLIC_HOST:-localhost}
+        -Dalfresco.port=${ALFRESCO_PORT:-8080}
+        -Dcsrf.filter.enabled=false
+        -Daos.baseUrlOverwrite=http://${ALFRESCO_PUBLIC_HOST:-localhost}:${ALFRESCO_PORT:-8080}/alfresco/aos
+        -Dmessaging.broker.url="failover:(nio://activemq:61616)?timeout=3000&jms.useCompression=true"
+        -Dmessaging.broker.username=${ACTIVEMQ_USER:-admin}
+        -Dmessaging.broker.password=${ACTIVEMQ_PASSWORD:-admin}
+        -Ddeployment.method=DOCKER_COMPOSE
+        -DlocalTransform.core-aio.url=http://transform-core-aio:8090/
+        -XX:MinRAMPercentage=50
+        -XX:MaxRAMPercentage=80
+    ports:
+      - "${ALFRESCO_PORT:-8080}:8080"
+    volumes:
+      - alfresco_data:/usr/local/tomcat/alf_data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8080/alfresco/api/-default-/public/alfresco/versions/1/probes/-ready-",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 4m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      activemq:
+        condition: service_healthy
+
+  transform-core-aio:
+    image: docker.io/alfresco/alfresco-transform-core-aio:${TRANSFORM_VERSION:-5.4.4}
+    mem_limit: 1536m
+    environment:
+      JAVA_OPTS: >-
+        -XX:MinRAMPercentage=50
+        -XX:MaxRAMPercentage=80
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/ready"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      activemq:
+        condition: service_healthy
+
+  share:
+    image: docker.io/alfresco/alfresco-share:${SHARE_VERSION:-26.2.2}
+    mem_limit: 1g
+    environment:
+      CSRF_FILTER_ORIGIN: http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}
+      CSRF_FILTER_REFERER: http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}/share/.*
+      REPO_HOST: alfresco
+      REPO_PORT: "8080"
+      JAVA_OPTS: >-
+        -XX:MinRAMPercentage=50
+        -XX:MaxRAMPercentage=80
+        -Dalfresco.host=${ALFRESCO_PUBLIC_HOST:-localhost}
+        -Dalfresco.port=${ALFRESCO_PORT:-8080}
+        -Dalfresco.context=alfresco
+        -Dalfresco.protocol=http
+    ports:
+      - "${SHARE_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/share"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      alfresco:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-17.9}
+    mem_limit: 512m
+    environment:
+      POSTGRES_USER: ${DB_USER:-alfresco}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-alfresco}
+      POSTGRES_DB: ${DB_NAME:-alfresco}
+    command: postgres -c max_connections=300 -c log_min_messages=LOG
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTICSEARCH_VERSION:-8.17.10}
+    mem_limit: 1g
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+
+  batch-indexing:
+    image: docker.io/alfresco/alfresco-elasticsearch-batch-indexing:${BATCH_INDEXING_VERSION:-5.8.0}
+    mem_limit: 1g
+    environment:
+      JAVA_OPTS: -Xms256m -Xmx768m
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-alfresco}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-alfresco}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-alfresco}
+      SPRING_ELASTICSEARCH_REST_URIS: http://elasticsearch:9200
+      ALFRESCO_ACCEPTEDCONTENTMEDIATYPESCACHE_BASEURL: http://transform-core-aio:8090/transform/config
+      ALFRESCO_ACS_URL: http://alfresco:8080
+      ALFRESCO_CONTENT_TRANSFORM_SHAREDSECRET: ${TRANSFORM_SHARED_SECRET:-secret}
+      ALFRESCO_REINDEX_CONTINUOUS_POLLINGINTERVAL: 15s
+      ALFRESCO_REINDEX_CONTINUOUS_CATCHUPPOLLINGINTERVAL: 1s
+      ALFRESCO_REINDEX_CONTINUOUS_MAXWINDOW: 30m
+      ALFRESCO_REINDEX_CONTINUOUS_OVERLAP: 10m
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      alfresco:
+        condition: service_healthy
+      transform-core-aio:
+        condition: service_healthy
+
+  activemq:
+    image: docker.io/alfresco/alfresco-activemq:${ACTIVEMQ_VERSION:-6.2.9-jre17-rockylinux8}
+    mem_limit: 1g
+    environment:
+      ACTIVEMQ_ADMIN_LOGIN: ${ACTIVEMQ_USER:-admin}
+      ACTIVEMQ_ADMIN_PASSWORD: ${ACTIVEMQ_PASSWORD:-admin}
+    ports:
+      - "${ACTIVEMQ_CONSOLE_PORT:-8161}:8161"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/61616'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+volumes:
+  alfresco_data:
+  postgres_data:
+  elasticsearch_data:
