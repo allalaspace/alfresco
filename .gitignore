@@ -1,1 +1,12 @@
 infra/alfresco/.env
+infra/alfresco/backups/
+
+# Terraform : état, plan et secrets.
+# Le lock file (.terraform.lock.hcl) est versionné : il épingle la version
+# du provider et ne contient aucun secret.
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfplan
+infra/terraform/terraform.tfvars
+infra/terraform/*.auto.tfvars

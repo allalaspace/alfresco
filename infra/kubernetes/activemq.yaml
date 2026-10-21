@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: activemq
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: activemq
+    app.kubernetes.io/part-of: alfresco
+spec:
+  selector:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: activemq
+  ports:
+    - name: openwire
+      port: 61616
+      targetPort: openwire
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: activemq-console
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: activemq
+    app.kubernetes.io/part-of: alfresco
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: activemq
+  ports:
+    - name: console
+      port: 8161
+      targetPort: console
+      nodePort: 30161
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: activemq
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: activemq
+    app.kubernetes.io/part-of: alfresco
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alfresco
+      app.kubernetes.io/component: activemq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alfresco
+        app.kubernetes.io/component: activemq
+        app.kubernetes.io/part-of: alfresco
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: activemq
+          image: docker.io/alfresco/alfresco-activemq:6.2.9-jre17-rockylinux8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: openwire
+              containerPort: 61616
+            - name: console
+              containerPort: 8161
+          env:
+            - name: ACTIVEMQ_ADMIN_LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: alfresco-secret
+                  key: ACTIVEMQ_USER
+            - name: ACTIVEMQ_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: alfresco-secret
+                  key: ACTIVEMQ_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - echo > /dev/tcp/127.0.0.1/61616
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - echo > /dev/tcp/127.0.0.1/61616
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: openwire
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5

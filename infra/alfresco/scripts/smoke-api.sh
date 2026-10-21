@@ -3,6 +3,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Valeurs fournies par l'appelant : elles priment sur le .env, pour pouvoir
+# cibler un autre port que celui du Compose (par exemple le NodePort
+# 30080 de la stack Terraform sur Kubernetes).
+declare -A OVERRIDES=()
+for key in ALFRESCO_PORT SHARE_PORT ALFRESCO_ADMIN_USER ALFRESCO_ADMIN_PASSWORD ALFRESCO_SITE_ID; do
+  if [[ -n "${!key:-}" ]]; then
+    OVERRIDES["${key}"]="${!key}"
+  fi
+done
+
 if [[ -f "${ROOT}/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -10,7 +21,12 @@ if [[ -f "${ROOT}/.env" ]]; then
   set +a
 fi
 
-HOST="${ALFRESCO_PUBLIC_HOST:-localhost}"
+for key in "${!OVERRIDES[@]}"; do
+  export "${key}=${OVERRIDES[${key}]}"
+done
+
+# Appels locaux. Le nom public du tunnel ne remplace pas le port publié sur la machine.
+HOST="127.0.0.1"
 PORT="${ALFRESCO_PORT:-8080}"
 USER_NAME="${ALFRESCO_ADMIN_USER:-admin}"
 PASSWORD="${ALFRESCO_ADMIN_PASSWORD:-admin}"
@@ -21,13 +37,27 @@ SEARCH="http://${HOST}:${PORT}/alfresco/api/-default-/public/search/versions/1/s
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
 
+# Sur Windows, "python3" pointe souvent vers le stub du Microsoft Store.
+# On cherche un interpréteur qui fonctionne vraiment.
+PYTHON=""
+for candidate in python3 python py; do
+  if command -v "${candidate}" >/dev/null 2>&1 && "${candidate}" -c 'import json' >/dev/null 2>&1; then
+    PYTHON="${candidate}"
+    break
+  fi
+done
+if [[ -z "${PYTHON}" ]]; then
+  echo "Erreur : aucun interpréteur Python utilisable trouvé (python3, python, py)." >&2
+  exit 1
+fi
+
 api() {
   curl -fsS -u "${USER_NAME}:${PASSWORD}" "$@"
 }
 
 echo "1. Identité"
 api "${BASE}/people/-me-" | tee "${WORKDIR}/me.json" >/dev/null
-python3 - "${WORKDIR}/me.json" <<'PY'
+"${PYTHON}" - "${WORKDIR}/me.json" <<'PY'
 import json, sys
 entry = json.load(open(sys.argv[1]))["entry"]
 print(f"   connecté en tant que {entry['id']}")
@@ -51,7 +81,7 @@ esac
 
 echo "3. Bibliothèque documentaire"
 api "${BASE}/sites/${SITE_ID}/containers" > "${WORKDIR}/containers.json"
-FOLDER_ID="$(python3 - "${WORKDIR}/containers.json" <<'PY'
+FOLDER_ID="$("${PYTHON}" - "${WORKDIR}/containers.json" <<'PY'
 import json, sys
 entries = json.load(open(sys.argv[1]))["list"]["entries"]
 for item in entries:
@@ -73,13 +103,16 @@ echo "   folderId=${FOLDER_ID}"
 echo "4. Upload"
 SAMPLE="${WORKDIR}/exemple.txt"
 printf 'Document de test Alfresco — %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${SAMPLE}"
+# Le nom du fichier envoyé est déjà celui du fichier source, la forme
+# ";"filename=" n'est donc pas nécessaire. Elle échoue en plus avec le
+# curl natif de Windows (mingw), qui ne lit plus le fichier local.
 api \
-  -F "filedata=@${SAMPLE};filename=exemple.txt" \
+  -F "filedata=@${SAMPLE}" \
   -F "name=exemple.txt" \
   -F "nodeType=cm:content" \
   -F "autoRename=true" \
   "${BASE}/nodes/${FOLDER_ID}/children" > "${WORKDIR}/upload.json"
-NODE_ID="$(python3 - "${WORKDIR}/upload.json" <<'PY'
+NODE_ID="$("${PYTHON}" - "${WORKDIR}/upload.json" <<'PY'
 import json, sys
 entry = json.load(open(sys.argv[1]))["entry"]
 print(entry["id"])
@@ -89,7 +122,7 @@ PY
 echo "   nodeId=${NODE_ID}"
 
 echo "5. Métadonnées"
-api "${BASE}/nodes/${NODE_ID}" | python3 -c 'import json,sys; e=json.load(sys.stdin)["entry"]; c=e["content"]; print("   %s (%s, %s octets)" % (e["name"], c["mimeType"], c["sizeInBytes"]))'
+api "${BASE}/nodes/${NODE_ID}" | "${PYTHON}" -c 'import json,sys; e=json.load(sys.stdin)["entry"]; c=e["content"]; print("   %s (%s, %s octets)" % (e["name"], c["mimeType"], c["sizeInBytes"]))'
 
 echo "6. Téléchargement"
 api -o "${WORKDIR}/download.txt" "${BASE}/nodes/${NODE_ID}/content"
@@ -102,7 +135,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   api -H "Content-Type: application/json" \
     -d "{\"query\":{\"query\":\"ID:${NODE_ID}\",\"language\":\"afts\"},\"paging\":{\"maxItems\":5}}" \
     "${SEARCH}" > "${WORKDIR}/search.json"
-  found="$(python3 - "${WORKDIR}/search.json" "${NODE_ID}" <<'PY'
+  found="$("${PYTHON}" - "${WORKDIR}/search.json" "${NODE_ID}" <<'PY'
 import json, sys
 payload = json.load(open(sys.argv[1]))
 wanted = sys.argv[2]
