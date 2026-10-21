@@ -1,6 +1,9 @@
 # ACS Community 26.2 — installation locale.
-# Aligné sur Alfresco/acs-deployment (community-compose.yaml), sans Traefik,
-# Kibana, Content App ni Control Center : le repository est exposé directement.
+# Aligné sur Alfresco/acs-deployment (community-compose.yaml), sans
+# Kibana, Content App ni Control Center : le repository est exposé en local.
+#
+# Accès distant : profil « tunnel » (Caddy + cloudflared). Aucun port entrant
+# sur la box. Voir le README, section Cloudflare Tunnel.
 #
 # Recherche : Elasticsearch + batch-indexing (Solr est déprécié depuis ACS 26.2).
 # Le secret partagé reste requis pour les transformations de contenu.
@@ -36,11 +39,11 @@ services:
         -Delasticsearch.host=elasticsearch
         -Delasticsearch.port=9200
         -Dshare.host=${ALFRESCO_PUBLIC_HOST:-localhost}
-        -Dshare.port=${SHARE_PORT:-8081}
+        -Dshare.port=${SHARE_PUBLIC_PORT:-${SHARE_PORT:-8081}}
         -Dalfresco.host=${ALFRESCO_PUBLIC_HOST:-localhost}
-        -Dalfresco.port=${ALFRESCO_PORT:-8080}
+        -Dalfresco.port=${ALFRESCO_PUBLIC_PORT:-${ALFRESCO_PORT:-8080}}
         -Dcsrf.filter.enabled=false
-        -Daos.baseUrlOverwrite=http://${ALFRESCO_PUBLIC_HOST:-localhost}:${ALFRESCO_PORT:-8080}/alfresco/aos
+        -Daos.baseUrlOverwrite=${ALFRESCO_PUBLIC_BASEURL:-http://${ALFRESCO_PUBLIC_HOST:-localhost}:${ALFRESCO_PORT:-8080}}/alfresco/aos
         -Dmessaging.broker.url="failover:(nio://activemq:61616)?timeout=3000&jms.useCompression=true"
         -Dmessaging.broker.username=${ACTIVEMQ_USER:-admin}
         -Dmessaging.broker.password=${ACTIVEMQ_PASSWORD:-admin}
@@ -49,7 +52,7 @@ services:
         -XX:MinRAMPercentage=50
         -XX:MaxRAMPercentage=80
     ports:
-      - "${ALFRESCO_PORT:-8080}:8080"
+      - "127.0.0.1:${ALFRESCO_PORT:-8080}:8080"
     volumes:
       - alfresco_data:/usr/local/tomcat/alf_data
     healthcheck:
@@ -93,19 +96,19 @@ services:
     image: docker.io/alfresco/alfresco-share:${SHARE_VERSION:-26.2.2}
     mem_limit: 1g
     environment:
-      CSRF_FILTER_ORIGIN: http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}
-      CSRF_FILTER_REFERER: http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}/share/.*
+      CSRF_FILTER_ORIGIN: ${SHARE_PUBLIC_ORIGIN:-http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}}
+      CSRF_FILTER_REFERER: ${SHARE_PUBLIC_ORIGIN:-http://${ALFRESCO_PUBLIC_HOST:-localhost}:${SHARE_PORT:-8081}}/share/.*
       REPO_HOST: alfresco
       REPO_PORT: "8080"
       JAVA_OPTS: >-
         -XX:MinRAMPercentage=50
         -XX:MaxRAMPercentage=80
         -Dalfresco.host=${ALFRESCO_PUBLIC_HOST:-localhost}
-        -Dalfresco.port=${ALFRESCO_PORT:-8080}
+        -Dalfresco.port=${ALFRESCO_PUBLIC_PORT:-${ALFRESCO_PORT:-8080}}
         -Dalfresco.context=alfresco
-        -Dalfresco.protocol=http
+        -Dalfresco.protocol=${ALFRESCO_PROTOCOL:-http}
     ports:
-      - "${SHARE_PORT:-8081}:8080"
+      - "127.0.0.1:${SHARE_PORT:-8081}:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/share"]
       interval: 20s
@@ -193,13 +196,39 @@ services:
       ACTIVEMQ_ADMIN_LOGIN: ${ACTIVEMQ_USER:-admin}
       ACTIVEMQ_ADMIN_PASSWORD: ${ACTIVEMQ_PASSWORD:-admin}
     ports:
-      - "${ACTIVEMQ_CONSOLE_PORT:-8161}:8161"
+      - "127.0.0.1:${ACTIVEMQ_CONSOLE_PORT:-8161}:8161"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/61616'"]
       interval: 10s
       timeout: 5s
       retries: 15
       start_period: 20s
+
+  # Profil « tunnel » : une seule entrée web. PostgreSQL, Elasticsearch,
+  # ActiveMQ et Transform restent sur le réseau Docker.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    mem_limit: 128m
+    volumes:
+      - ./tunnel/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      alfresco:
+        condition: service_healthy
+      share:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    mem_limit: 128m
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - caddy
 
 volumes:
   alfresco_data:

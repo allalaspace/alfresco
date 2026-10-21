@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: share
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: share
+    app.kubernetes.io/part-of: alfresco
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: share
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: share
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: share
+    app.kubernetes.io/part-of: alfresco
+spec:
+  replicas: 1
+  # Share reste en init tant qu'Alfresco n'est pas prêt, au-delà des 600 s par défaut.
+  progressDeadlineSeconds: 1800
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alfresco
+      app.kubernetes.io/component: share
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alfresco
+        app.kubernetes.io/component: share
+        app.kubernetes.io/part-of: alfresco
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      initContainers:
+        - name: wait-alfresco
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until wget -q -O- http://alfresco:8080/alfresco/api/-default-/public/alfresco/versions/1/probes/-ready-; do
+                echo "attente d'alfresco"
+                sleep 5
+              done
+      containers:
+        - name: share
+          image: docker.io/alfresco/alfresco-share:26.2.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ALFRESCO_PUBLIC_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: alfresco-config
+                  key: ALFRESCO_PUBLIC_HOST
+            - name: ALFRESCO_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: alfresco-config
+                  key: ALFRESCO_PORT
+            - name: SHARE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: alfresco-config
+                  key: SHARE_PORT
+            - name: REPO_HOST
+              value: alfresco
+            - name: REPO_PORT
+              value: "8080"
+            - name: CSRF_FILTER_ORIGIN
+              value: http://$(ALFRESCO_PUBLIC_HOST):$(SHARE_PORT)
+            - name: CSRF_FILTER_REFERER
+              value: http://$(ALFRESCO_PUBLIC_HOST):$(SHARE_PORT)/share/.*
+            - name: JAVA_OPTS
+              value: >-
+                -XX:MinRAMPercentage=50
+                -XX:MaxRAMPercentage=80
+                -Dalfresco.host=$(ALFRESCO_PUBLIC_HOST)
+                -Dalfresco.port=$(ALFRESCO_PORT)
+                -Dalfresco.context=alfresco
+                -Dalfresco.protocol=http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /share
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          readinessProbe:
+            httpGet:
+              path: /share
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5

@@ -1,0 +1,16 @@
+# Entrée unique du tunnel. Le navigateur parle à Cloudflare en HTTPS.
+# Caddy parle en HTTP à Share et au dépôt, sur le réseau Docker.
+:80 {
+	handle /share* {
+		reverse_proxy share:8080 {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Port 443
+		}
+	}
+	handle {
+		reverse_proxy alfresco:8080 {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Port 443
+		}
+	}
+}

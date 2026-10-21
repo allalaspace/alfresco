@@ -10,7 +10,8 @@ if [[ -f "${ROOT}/.env" ]]; then
   set +a
 fi
 
-HOST="${ALFRESCO_PUBLIC_HOST:-localhost}"
+# Sonde locale, même si ALFRESCO_PUBLIC_HOST pointe vers le nom public du tunnel.
+HOST="127.0.0.1"
 PORT="${ALFRESCO_PORT:-8080}"
 TIMEOUT="${WAIT_TIMEOUT_SECONDS:-600}"
 URL="http://${HOST}:${PORT}/alfresco/api/-default-/public/alfresco/versions/1/probes/-ready-"

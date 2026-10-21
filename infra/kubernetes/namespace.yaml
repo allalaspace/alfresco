@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: alfresco
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/part-of: alfresco

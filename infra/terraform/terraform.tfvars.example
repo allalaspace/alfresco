@@ -1,0 +1,26 @@
+# Copier ce fichier vers terraform.tfvars, ou générer le fichier avec :
+#
+#   ./scripts/tfvars-from-env.sh
+#
+# qui lit infra/alfresco/.env et produit le même contenu.
+#
+# terraform.tfvars est ignoré par git : il contient des mots de passe.
+
+namespace   = "alfresco"
+public_host = "localhost"
+
+# --- Base de données -------------------------------------------------------
+db_name     = "alfresco"
+db_user     = "alfresco"
+db_password = "alfresco"
+
+# --- ActiveMQ --------------------------------------------------------------
+activemq_user     = "admin"
+activemq_password = "admin"
+
+# --- Secret partagé ACS <-> batch-indexing ---------------------------------
+transform_shared_secret = "secret"
+
+# --- Compte bootstrap Alfresco --------------------------------------------
+alfresco_admin_user     = "admin"
+alfresco_admin_password = "admin"

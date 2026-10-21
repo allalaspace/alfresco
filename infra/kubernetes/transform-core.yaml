@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: transform-core-aio
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: transform-core
+    app.kubernetes.io/part-of: alfresco
+spec:
+  selector:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: transform-core
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transform-core-aio
+  labels:
+    app.kubernetes.io/name: alfresco
+    app.kubernetes.io/component: transform-core
+    app.kubernetes.io/part-of: alfresco
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alfresco
+      app.kubernetes.io/component: transform-core
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alfresco
+        app.kubernetes.io/component: transform-core
+        app.kubernetes.io/part-of: alfresco
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      initContainers:
+        - name: wait-activemq
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z activemq 61616; do
+                echo "attente d'activemq"
+                sleep 2
+              done
+      containers:
+        - name: transform-core-aio
+          image: docker.io/alfresco/alfresco-transform-core-aio:5.4.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: JAVA_OPTS
+              value: -XX:MinRAMPercentage=50 -XX:MaxRAMPercentage=80
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5

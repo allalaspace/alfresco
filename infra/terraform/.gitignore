@@ -1,0 +1,13 @@
+# Terraform state and local artifacts
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Generated from infra/alfresco/.env — contains passwords
+terraform.tfvars
+*.auto.tfvars
+
+# .terraform.lock.hcl is committed: it pins the provider version and holds no secrets.
